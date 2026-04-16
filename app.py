@@ -19,13 +19,14 @@ le = pickle.load(open('encoder.pkl', 'rb'))  # Example file name, adjust as need
 
 # Function to clean resume text
 def cleanResume(txt):
-    cleanText = re.sub('http\S+\s', ' ', txt)
+    cleanText = re.sub(r'http\S+', ' ', txt)
     cleanText = re.sub('RT|cc', ' ', cleanText)
     cleanText = re.sub('#\S+\s', ' ', cleanText)
     cleanText = re.sub('@\S+', '  ', cleanText)
     cleanText = re.sub('[%s]' % re.escape("""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""), ' ', cleanText)
     cleanText = re.sub(r'[^\x00-\x7f]', ' ', cleanText)
     cleanText = re.sub('\s+', ' ', cleanText)
+    
     return cleanText
 
 
@@ -91,6 +92,11 @@ def pred(input_resume):
 
     return predicted_category_name[0]  # Return the category name
 
+def highlight_text(text, keywords):
+    for word in keywords:
+        pattern = re.compile(rf"\b({word})\b", re.IGNORECASE)
+        text = pattern.sub(r"<mark>\1</mark>", text)
+    return text
 
 # Streamlit app layout
 def main():
@@ -116,6 +122,23 @@ def main():
             st.subheader("Predicted Category")
             category = pred(resume_text)
             st.write(f"The predicted category of the uploaded resume is: **{category}**")
+            # Extract keywords using TF-IDF
+            cleaned_text = cleanResume(resume_text)
+            input_vec = tfidf.transform([cleaned_text])
+
+            feature_names = tfidf.get_feature_names_out()
+            top_indices = input_vec.toarray()[0].argsort()[-10:][::-1]
+            top_keywords = [feature_names[i] for i in top_indices]
+
+            # Show keywords
+            st.subheader("🔑 Top Keywords")
+            st.write(", ".join(top_keywords))
+
+            # Highlight resume
+            highlighted = highlight_text(resume_text, top_keywords)
+
+            if st.checkbox("Show Highlighted Resume"):
+                st.markdown(highlighted, unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"Error processing the file: {str(e)}")
