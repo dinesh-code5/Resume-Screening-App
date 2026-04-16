@@ -1,148 +1,236 @@
-# you need to install all these in your terminal
-# pip install streamlit
-# pip install scikit-learn
-# pip install python-docx
-# pip install PyPDF2
-
-
+# ---------------- IMPORTS ----------------
 import streamlit as st
 import pickle
-import docx  # Extract text from Word file
-import PyPDF2  # Extract text from PDF
+import docx
+import PyPDF2
 import re
+import plotly.express as px
 
-# Load pre-trained model and TF-IDF vectorizer (ensure these are saved earlier)
-svc_model = pickle.load(open('clf.pkl', 'rb'))  # Example file name, adjust as needed
-tfidf = pickle.load(open('tfidf.pkl', 'rb'))  # Example file name, adjust as needed
-le = pickle.load(open('encoder.pkl', 'rb'))  # Example file name, adjust as needed
+# ---------------- LOAD MODELS ----------------
+svc_model = pickle.load(open('clf.pkl', 'rb'))
+tfidf = pickle.load(open('tfidf.pkl', 'rb'))
+le = pickle.load(open('encoder.pkl', 'rb'))
 
+# ---------------- SKILLS ----------------
+SKILLS_DB = {
+    "Tech": [
+        "python", "java", "c++", "sql", "pandas", "numpy",
+        "machine learning", "deep learning", "nlp",
+        "scikit-learn", "tensorflow", "keras", "pytorch",
+        "data analysis", "data science",
+        "business analysis", "business intelligence"
+    ],
+    "Cloud": [
+        "aws", "azure", "gcp", "docker", "kubernetes"
+    ],
+    "Tools": [
+        "power bi", "tableau", "excel", "git", "github",
+        "power query", "dax"
+    ],
+    "Soft": [
+        "communication", "teamwork", "leadership",
+        "problem solving", "critical thinking",
+        "collaboration", "adaptability", "time management"
+    ]
+}
 
-# Function to clean resume text
+ROLE_SKILLS = {
+    "Data Science": [
+        "python", "machine learning", "pandas", "numpy",
+        "scikit-learn", "data analysis"
+    ],
+    "Data Analyst": [
+        "sql", "excel", "power bi", "data analysis", "business intelligence"
+    ],
+    "Web Developer": [
+        "html", "css", "javascript", "react"
+    ]
+}
+
+# ---------------- CLEAN TEXT ----------------
 def cleanResume(txt):
-    cleanText = re.sub(r'http\S+', ' ', txt)
-    cleanText = re.sub('RT|cc', ' ', cleanText)
-    cleanText = re.sub('#\S+\s', ' ', cleanText)
-    cleanText = re.sub('@\S+', '  ', cleanText)
-    cleanText = re.sub('[%s]' % re.escape("""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""), ' ', cleanText)
-    cleanText = re.sub(r'[^\x00-\x7f]', ' ', cleanText)
-    cleanText = re.sub('\s+', ' ', cleanText)
-    
-    return cleanText
+    txt = re.sub(r'http\S+', ' ', txt)
+    txt = re.sub(r'RT|cc', ' ', txt)
+    txt = re.sub(r'#\S+', ' ', txt)
+    txt = re.sub(r'@\S+', ' ', txt)
+    txt = re.sub(r'[^\x00-\x7f]', ' ', txt)
+    txt = re.sub(r'\s+', ' ', txt)
+    return txt
 
-
-# Function to extract text from PDF
+# ---------------- FILE HANDLING ----------------
 def extract_text_from_pdf(file):
-    pdf_reader = PyPDF2.PdfReader(file)
-    text = ''
-    for page in pdf_reader.pages:
-        text += page.extract_text()
-    return text
+    reader = PyPDF2.PdfReader(file)
+    return "".join([p.extract_text() or "" for p in reader.pages])
 
-
-# Function to extract text from DOCX
 def extract_text_from_docx(file):
     doc = docx.Document(file)
-    text = ''
-    for paragraph in doc.paragraphs:
-        text += paragraph.text + '\n'
-    return text
+    return "\n".join([p.text for p in doc.paragraphs])
 
-
-# Function to extract text from TXT with explicit encoding handling
 def extract_text_from_txt(file):
-    # Try using utf-8 encoding for reading the text file
     try:
-        text = file.read().decode('utf-8')
-    except UnicodeDecodeError:
-        # In case utf-8 fails, try 'latin-1' encoding as a fallback
-        text = file.read().decode('latin-1')
-    return text
+        return file.read().decode('utf-8')
+    except:
+        return file.read().decode('latin-1')
 
-
-# Function to handle file upload and extraction
-def handle_file_upload(uploaded_file):
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    if file_extension == 'pdf':
-        text = extract_text_from_pdf(uploaded_file)
-    elif file_extension == 'docx':
-        text = extract_text_from_docx(uploaded_file)
-    elif file_extension == 'txt':
-        text = extract_text_from_txt(uploaded_file)
+def handle_file_upload(file):
+    ext = file.name.split('.')[-1].lower()
+    if ext == 'pdf':
+        return extract_text_from_pdf(file)
+    elif ext == 'docx':
+        return extract_text_from_docx(file)
+    elif ext == 'txt':
+        return extract_text_from_txt(file)
     else:
-        raise ValueError("Unsupported file type. Please upload a PDF, DOCX, or TXT file.")
+        raise ValueError("Unsupported file type")
+
+# ---------------- SKILL EXTRACTION ----------------
+def extract_skills(text):
+    text = text.lower().replace("-", " ").replace(".", "")
+    categorized = {}
+
+    for category, skills in SKILLS_DB.items():
+        found = []
+        for skill in skills:
+            if skill in text or f"{skill} skills" in text:
+                found.append(skill)
+        categorized[category] = list(set(found))
+
+    return categorized
+
+# ---------------- SKILL GAP ----------------
+def get_skill_gap(role, categorized_skills):
+    user_skills = [s for v in categorized_skills.values() for s in v]
+    required = ROLE_SKILLS.get(role, [])
+    return [s for s in required if s not in user_skills]
+
+# ---------------- MODEL ----------------
+def pred(text):
+    vec = tfidf.transform([cleanResume(text)]).toarray()
+    return le.inverse_transform(svc_model.predict(vec))[0]
+
+# ---------------- JOB MATCH ----------------
+def job_match_score(resume, jd):
+    from sklearn.metrics.pairwise import cosine_similarity
+    r = tfidf.transform([cleanResume(resume)])
+    j = tfidf.transform([cleanResume(jd)])
+    return round(cosine_similarity(r, j)[0][0] * 100, 2)
+
+# ---------------- HIGHLIGHT ----------------
+def highlight_skills(text, skills):
+    for s in skills:
+        text = re.sub(
+            rf"\b({re.escape(s)})\b",
+            r"<mark style='background-color:#22c55e'>\1</mark>",
+            text,
+            flags=re.IGNORECASE
+        )
     return text
 
-
-# Function to predict the category of a resume
-def pred(input_resume):
-    # Preprocess the input text (e.g., cleaning, etc.)
-    cleaned_text = cleanResume(input_resume)
-
-    # Vectorize the cleaned text using the same TF-IDF vectorizer used during training
-    vectorized_text = tfidf.transform([cleaned_text])
-
-    # Convert sparse matrix to dense
-    vectorized_text = vectorized_text.toarray()
-
-    # Prediction
-    predicted_category = svc_model.predict(vectorized_text)
-
-    # get name of predicted category
-    predicted_category_name = le.inverse_transform(predicted_category)
-
-    return predicted_category_name[0]  # Return the category name
-
-def highlight_text(text, keywords):
-    for word in keywords:
-        pattern = re.compile(rf"\b({word})\b", re.IGNORECASE)
-        text = pattern.sub(r"<mark>\1</mark>", text)
-    return text
-
-# Streamlit app layout
+# ---------------- UI ----------------
 def main():
-    st.set_page_config(page_title="Resume Category Prediction", page_icon="📄", layout="wide")
+    st.set_page_config(page_title="AI Resume Analyzer", layout="wide")
 
-    st.title("Resume Category Prediction App")
-    st.markdown("Upload a resume in PDF, TXT, or DOCX format and get the predicted job category.")
+    # 🔥 Modern UI
+    st.markdown("""
+    <style>
+    .stApp {background: linear-gradient(135deg, #0f172a, #020617); color: white;}
+    h1 {text-align:center;color:#38bdf8;}
+    </style>
+    """, unsafe_allow_html=True)
 
-    # File upload section
-    uploaded_file = st.file_uploader("Upload a Resume", type=["pdf", "docx", "txt"])
+    st.markdown("<h1>🚀 AI Resume Analyzer</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:gray;'>Smart Resume Insights</p>", unsafe_allow_html=True)
 
-    if uploaded_file is not None:
-        # Extract text from the uploaded file
+    file = st.file_uploader("📄 Upload Resume", type=["pdf", "docx", "txt"])
+
+    if file:
         try:
-            resume_text = handle_file_upload(uploaded_file)
-            st.write("Successfully extracted the text from the uploaded resume.")
+            text = handle_file_upload(file)
+            st.success("✅ Resume processed successfully!")
 
-            # Display extracted text (optional)
-            if st.checkbox("Show extracted text", False):
-                st.text_area("Extracted Resume Text", resume_text, height=300)
+            if st.checkbox("Show Resume Text"):
+                st.text_area("", text, height=200)
 
-            # Make prediction
-            st.subheader("Predicted Category")
-            category = pred(resume_text)
-            st.write(f"The predicted category of the uploaded resume is: **{category}**")
-            # Extract keywords using TF-IDF
-            cleaned_text = cleanResume(resume_text)
-            input_vec = tfidf.transform([cleaned_text])
+            # Prediction
+            role = pred(text)
 
-            feature_names = tfidf.get_feature_names_out()
-            top_indices = input_vec.toarray()[0].argsort()[-10:][::-1]
-            top_keywords = [feature_names[i] for i in top_indices]
+            skills = extract_skills(text)
+            all_skills = [s for v in skills.values() for s in v]
 
-            # Show keywords
-            st.subheader("🔑 Top Keywords")
-            st.write(", ".join(top_keywords))
+            total_possible = sum(len(v) for v in SKILLS_DB.values())
+            score = round((len(all_skills) / total_possible) * 100, 2)
 
-            # Highlight resume
-            highlighted = highlight_text(resume_text, top_keywords)
+            gap = get_skill_gap(role, skills)
 
-            if st.checkbox("Show Highlighted Resume"):
-                st.markdown(highlighted, unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.success(f"🎯 Role: {role}")
+                st.metric("📊 Resume Score", f"{score}%")
+
+            with col2:
+                st.info("🛠 Skills")
+                st.write(", ".join(all_skills) if all_skills else "None")
+
+            st.markdown("---")
+
+            # Skills breakdown
+            st.subheader("🧠 Skills Breakdown")
+            for cat, s in skills.items():
+                st.write(f"**{cat}:** {', '.join(s) if s else 'None'}")
+
+            # Skill gaps
+            st.subheader("⚠️ Skill Gaps")
+            if gap:
+                st.write("❌ " + ", ".join(gap))
+            else:
+                st.success("Perfect match!")
+
+            # Plotly chart
+            st.subheader("📊 Skills Distribution")
+            counts = {k: len(v) for k, v in skills.items()}
+
+            fig = px.bar(
+                x=list(counts.keys()),
+                y=list(counts.values()),
+                color=list(counts.keys()),
+                text=list(counts.values())
+            )
+
+            fig.update_layout(
+                plot_bgcolor="#0f172a",
+                paper_bgcolor="#0f172a",
+                font=dict(color="white")
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("---")
+
+            # Job match
+            st.subheader("🎯 Job Match Analyzer")
+            jd = st.text_area("Paste Job Description")
+
+            if st.button("🚀 Analyze Match"):
+                if jd.strip() == "":
+                    st.warning("Enter job description")
+                else:
+                    match = job_match_score(text, jd)
+                    st.metric("Match Score", f"{match}%")
+
+                    if match > 75:
+                        st.success("🔥 Strong Match")
+                    elif match > 50:
+                        st.warning("⚠️ Moderate Match")
+                    else:
+                        st.error("❌ Low Match")
+
+            # Highlight
+            if st.checkbox("📄 Show Highlighted Resume"):
+                st.markdown(highlight_skills(text, all_skills), unsafe_allow_html=True)
 
         except Exception as e:
-            st.error(f"Error processing the file: {str(e)}")
-
+            st.error(str(e))
 
 if __name__ == "__main__":
     main()
